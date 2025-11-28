@@ -1,5 +1,5 @@
 # smartfarm_interactive.py
-# DESIGN UPDATE: Forced Light Mode + Future-Only Graph
+# DESIGN UPDATE: Dark Mode Optimized + Zoomed-in Graph
 
 import streamlit as st
 import pandas as pd
@@ -27,24 +27,18 @@ DATA_RAW_URL = ""
 OUTPUT_DIR = "analysis_outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# ---------- UI & STYLING (Forced Light Mode) ----------
+# ---------- UI & STYLING (Dark Mode Optimized) ----------
 st.markdown("""
 <style>
     /* Import Font */
     @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
 
-    /* FORCE LIGHT THEME ON THE WHOLE APP */
-    .stApp {
-        background-color: #f8fafc; /* Light Slate Background */
+    /* Global Font Application */
+    html, body, [class*="css"] {
         font-family: 'Poppins', sans-serif;
     }
     
-    /* Fix Text Colors for Light Background */
-    h1, h2, h3, p, div, label, span {
-        color: #1e293b !important; /* Dark Slate Text */
-    }
-    
-    /* Header Styling */
+    /* Header Styling - White Text for Dark Background */
     .main-header {
         text-align: center;
         margin-bottom: 2rem;
@@ -52,23 +46,24 @@ st.markdown("""
     .main-header h1 {
         font-weight: 700;
         margin-bottom: 0.5rem;
-        color: #0f172a !important;
+        color: #f1f5f9 !important; /* White/Slate-100 */
     }
     .main-header p {
-        color: #64748b !important;
+        color: #94a3b8 !important; /* Slate-400 */
         font-size: 15px;
     }
 
-    /* THE CARD YOU LIKED */
+    /* THE HERO CARD (Kept Light for Contrast) */
     .result-card {
         background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
         border: 1px solid #10b981;
         border-radius: 16px;
         padding: 2rem;
         text-align: center;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
         margin-bottom: 1.5rem;
     }
+    /* Text INSIDE the card must be dark to read on light green */
     .price-label {
         color: #047857 !important;
         font-weight: 600;
@@ -90,15 +85,6 @@ st.markdown("""
         font-weight: 600;
     }
     
-    /* Input Styling Adjustments */
-    .stSelectbox div[data-baseweb="select"] > div,
-    .stNumberInput div[data-baseweb="input"] > div {
-        background-color: white !important;
-        color: black !important;
-        border-radius: 8px;
-        border: 1px solid #e2e8f0;
-    }
-    
     /* Button Styling */
     .stButton > button {
         width: 100%;
@@ -112,20 +98,19 @@ st.markdown("""
     }
     .stButton > button:hover {
         background-color: #059669;
-        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);
-        color: white !important;
+        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
     }
 
-    /* Table Styling */
+    /* Table Styling - Light Text for Dark Background */
     .forecast-row {
         display: flex;
         justify-content: space-between;
         padding: 12px 0;
-        border-bottom: 1px solid #e2e8f0;
+        border-bottom: 1px solid #334155; /* Darker border */
         font-size: 1rem;
     }
-    .date-col { color: #64748b !important; }
-    .price-col { font-weight: 600; color: #0f172a !important; }
+    .date-col { color: #94a3b8 !important; } /* Slate-400 */
+    .price-col { font-weight: 600; color: #f1f5f9 !important; } /* White */
 
 </style>
 """, unsafe_allow_html=True)
@@ -292,7 +277,7 @@ if st.button("🚀 Generate Forecast"):
             precip_input = float(feat_full.sort_values('Date').iloc[-1].get('Precipitation_mm',0)) if 'Precipitation_mm' in feat_full.columns else 0.0
             fc = recursive_forecast(model, feat_full, candidate_features, temp_today, precip_input, horizon)
 
-        # 1. The Card You Liked
+        # 1. The Card (Kept as is - works great on dark)
         tomorrow_val = fc.iloc[0]['Predicted']
         st.markdown(f"""
         <div class="result-card">
@@ -302,32 +287,38 @@ if st.button("🚀 Generate Forecast"):
         </div>
         """, unsafe_allow_html=True)
 
-        # 2. Graph (Future Only)
+        # 2. Graph (Zoomed In + Dark Mode Axes)
         fc['Date'] = pd.to_datetime(fc['Date'])
         
-        # Area chart to look "futuristic"
-        c = alt.Chart(fc).mark_area(
-            line={'color':'#10b981', 'size':3},
-            color=alt.Gradient(
-                gradient='linear',
-                stops=[alt.GradientStop(color='#10b981', offset=0),
-                       alt.GradientStop(color='rgba(255, 255, 255, 0)', offset=1)],
-                x1=1, x2=1, y1=1, y2=0
-            )
+        # We calculate min/max to ensure the scale is not flat 0-100
+        y_min = fc['Predicted'].min() * 0.99
+        y_max = fc['Predicted'].max() * 1.01
+
+        c = alt.Chart(fc).mark_line(
+            color='#10b981', 
+            strokeWidth=3, 
+            point=True
         ).encode(
-            x=alt.X('Date', axis=alt.Axis(format='%b %d', title='Forecast Date')),
-            y=alt.Y('Predicted', title='Price (JPY)', scale=alt.Scale(zero=False)),
+            x=alt.X('Date', 
+                    axis=alt.Axis(format='%b %d', title='Forecast Date', labelColor='#94a3b8', titleColor='#94a3b8')),
+            y=alt.Y('Predicted', 
+                    title='Price (JPY)', 
+                    # ZERO=FALSE is key here to zoom in
+                    scale=alt.Scale(zero=False, domain=[y_min, y_max]), 
+                    axis=alt.Axis(labelColor='#94a3b8', titleColor='#94a3b8')),
             tooltip=['Date', 'Predicted']
         ).properties(
             title="Future Trend",
             height=250
-        ).configure_axis(
-            grid=False, labelFont='Poppins', titleFont='Poppins', labelColor='#64748b', titleColor='#64748b'
-        ).configure_view(strokeWidth=0)
+        ).configure_title(
+            color='#f1f5f9', font='Poppins' # White title
+        ).configure_view(
+            strokeWidth=0
+        )
         
         st.altair_chart(c, use_container_width=True)
 
-        # 3. Table
+        # 3. Table (Dark Mode Text)
         if horizon > 1:
             with st.expander("📄 View Details"):
                 html = "<div>"
