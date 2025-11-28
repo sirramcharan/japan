@@ -192,4 +192,49 @@ for i in range(horizon):
     else:
         pred = model.predict(fv_df)[0]
     
-    next_date = current['Date
+    # --- FIXED LINE BELOW ---
+    next_date = current['Date'] + pd.Timedelta(days=1)
+    rows.append({'Date': next_date, 'Price': float(pred)})
+    
+    # Update state
+    recent_temps.append(temp_input)
+    recent_precips.append(precip_input)
+    current['Date'] = next_date
+    current['Market_Price_JPY_per_kg'] = pred
+
+fc_df = pd.DataFrame(rows)
+
+# Recommendation Logic
+change_pct = (fc_df['Price'].iloc[0] - last_price) / max(1e-6, last_price) * 100
+if change_pct > 1.5:
+    color, icon, msg = "#28a745", "📈", "Prices Rising: Hold Stock"
+elif change_pct < -1.5:
+    color, icon, msg = "#dc3545", "📉", "Prices Falling: Sell Now"
+else:
+    color, icon, msg = "#17a2b8", "⚖️", "Prices Stable"
+
+# Render UI
+st.markdown(f"""
+<div class="big-card" style="background-color: {color};">
+    {icon} {msg} <br>
+    <span style="font-size:16px; opacity:0.9">Tomorrow: {change_pct:+.2f}%</span>
+</div>
+""", unsafe_allow_html=True)
+
+tab1, tab2 = st.tabs(["📊 Visuals", "📋 Data"])
+with tab1:
+    # Combine history and forecast for plotting
+    hist_data = feat_df[['Date', 'Market_Price_JPY_per_kg']].tail(30).rename(columns={'Market_Price_JPY_per_kg': 'Price'})
+    hist_data['Type'] = 'Historical'
+    fc_data = fc_df.copy()
+    fc_data['Type'] = 'Forecast'
+    
+    # Link the lines
+    link_row = pd.DataFrame([{'Date': hist_data.iloc[-1]['Date'], 'Price': hist_data.iloc[-1]['Price'], 'Type': 'Forecast'}])
+    chart_data = pd.concat([hist_data, link_row, fc_data])
+    
+    st.line_chart(chart_data, x='Date', y='Price', color='Type')
+
+with tab2:
+    st.dataframe(fc_df.style.format({"Price": "¥{:.2f}"}), use_container_width=True)
+    st.caption(f"Model Accuracy (MAE): ¥{mae:.2f}")
