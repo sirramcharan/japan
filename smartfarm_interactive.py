@@ -1,5 +1,5 @@
 # smartfarm_interactive.py
-# FIX: "Mini-Cards" now use a High-Contrast Light Green theme to ensure visibility.
+# FIX: Removed indentation in HTML generation to prevent "Code Block" rendering issue.
 
 import streamlit as st
 import pandas as pd
@@ -72,8 +72,7 @@ st.markdown("""
         font-weight: 600;
     }
     
-    /* MINI CARDS GRID - UPDATED FOR VISIBILITY */
-    /* We force a Light Background (#f0fdf4) so dark text is always seen */
+    /* MINI CARDS GRID */
     .grid-container {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -102,7 +101,7 @@ st.markdown("""
         margin-bottom: 4px;
     }
     .mini-price {
-        color: #064e3b; /* Dark Green Text (High Contrast) */
+        color: #064e3b; /* Dark Green Text */
         font-size: 1.4rem;
         font-weight: 800;
     }
@@ -325,17 +324,12 @@ if st.button("🚀 Generate Forecast"):
         if horizon > 1:
             st.markdown("<div style='margin-top:20px; margin-bottom:10px; color:#f1f5f9; font-weight:600'>Upcoming Outlook</div>", unsafe_allow_html=True)
             
+            # FIXED: Removed indentation inside the string to prevent code-block rendering
             grid_html = '<div class="grid-container">'
             for _, row in fc.iloc[1:].iterrows():
                 d_str = row['Date'].strftime('%b %d')
                 price = row['Predicted']
-                grid_html += f"""
-                <div class="mini-card">
-                    <div class="mini-date">{d_str}</div>
-                    <div class="mini-price">{price}</div>
-                    <div class="mini-unit">JPY/kg</div>
-                </div>
-                """
+                grid_html += f"""<div class="mini-card"><div class="mini-date">{d_str}</div><div class="mini-price">{price}</div><div class="mini-unit">JPY/kg</div></div>"""
             grid_html += "</div>"
             st.markdown(grid_html, unsafe_allow_html=True)
             
