@@ -1,96 +1,63 @@
 # smartfarm_interactive.py
-# Polished Streamlit app UI for SmartFarm price forecasting
-# Single-file app: clean layout, metrics, tabs, downloads, and nice styling.
+# Minimalistic, fast Streamlit app for short-term produce price forecasts.
+# Single-file. Designed to train quickly, cache models, and show a bold "tomorrow" result.
 #
-# Requirements (minimal):
-# streamlit, pandas, numpy, scikit-learn, joblib
-# Optional: xgboost (will be used if available)
+# Requirements (minimal): streamlit, pandas, numpy, scikit-learn, joblib
+# Put your dataset in the repo root as realistic_dummy_dataset.csv OR set DATA_RAW_URL to the raw github url.
 
 import streamlit as st
 import pandas as pd
 import numpy as np
+import os, io, hashlib, joblib, time
 from datetime import timedelta
-from sklearn.metrics import mean_absolute_error
-import joblib
-import os
-import io
 
-# ----- App config -----
-st.set_page_config(page_title="SmartFarm — Farmer Forecast", page_icon="🌾", layout="wide")
-APP_TITLE = "SmartFarm — Price Forecast"
-DATA_PATH_DEFAULT = "realistic_dummy_dataset.csv"  # change to your repo/raw URL if needed
+# prefer HistGradientBoosting for speed; fallback if not available
+try:
+    from sklearn.ensemble import HistGradientBoostingRegressor
+    HAVE_HGB = True
+except Exception:
+    HAVE_HGB = False
+from sklearn.linear_model import Ridge
+from sklearn.metrics import mean_absolute_error
+
+# ---------- CONFIG ----------
+st.set_page_config(page_title="SmartFarm — Minimal Forecast", page_icon="🌾", layout="centered")
+DATA_LOCAL = "realistic_dummy_dataset.csv"   # file in your repo
+DATA_RAW_URL = ""  # optional: "https://raw.githubusercontent.com/<user>/<repo>/main/realistic_dummy_dataset.csv"
 OUTPUT_DIR = "analysis_outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-MODEL_SAVE_PATH = os.path.join(OUTPUT_DIR, "model_{}.joblib")
 
-# ----- Attempt optional ML backends -----
-USE_XGBOOST = False
-try:
-    import xgboost as xgb
-    USE_XGBOOST = True
-except Exception:
-    USE_XGBOOST = False
+# UI styling (minimal)
+st.markdown("""
+<style>
+body { background: #fbfbfc; color: #0f172a; font-family: Inter, system-ui, -apple-system, 'Helvetica Neue', Arial; }
+.main { max-width:760px; margin:auto; }
+.header { text-align:center; padding-top:18px; padding-bottom:6px; }
+.h1 { font-weight:700; font-size:22px; margin:0; }
+.sub { color:#6b7280; font-size:13px; margin-bottom:18px; }
+.controls { display:flex; gap:12px; justify-content:center; margin-bottom:12px; }
+.card { background: white; border-radius:12px; padding:18px; box-shadow: 0 6px 18px rgba(2,6,23,0.06); }
+.big-price { font-weight:800; font-size:42px; color:#05264b; }
+.small-list { color:#0f172a; font-size:14px; }
+.btn { margin-top:10px; }
+</style>
+""", unsafe_allow_html=True)
 
-# ----- CSS styling -----
-st.markdown(
-    """
-    <style>
-    /* General */
-    .stApp { font-family: 'Segoe UI', Roboto, Arial, sans-serif; }
-    .header { display: flex; align-items: center; gap: 16px; }
-    .brand-title { font-size:28px; font-weight:700; margin:0; }
-    .brand-sub { color: #6b7280; margin:0; font-size:13px; }
+st.markdown("<div class='main'><div class='header'>"
+            "<div class='h1'>SmartFarm — Quick Forecast</div>"
+            "<div class='sub'>Enter today’s temperature and pick days to forecast. Predictions are fast and cached.</div>"
+            "</div>", unsafe_allow_html=True)
 
-    /* Card like boxes */
-    .card { background: linear-gradient(90deg, #ffffff, #fbfbff); padding:14px; border-radius:12px; box-shadow: 0 6px 18px rgba(16,24,40,0.06); }
-    .metric { display:flex; align-items:baseline; gap:8px; }
-
-    /* Narrow table */
-    .small { font-size:13px; color:#374151; }
-
-    /* Tweak sidebar */
-    [data-testid="stSidebar"] { background-color: #f8fafc; }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-# ----- Header -----
-with st.container():
-    col1, col2 = st.columns([0.12, 0.88])
-    with col1:
-        st.markdown("<div style='font-size:40px'>🌾</div>", unsafe_allow_html=True)
-    with col2:
-        st.markdown("<div class='header'><div>"
-                    f"<h1 class='brand-title'>{APP_TITLE}</h1>"
-                    f"<div class='brand-sub'>Simple, actionable price forecasts for farmers — pick produce, enter weather, and forecast.</div>"
-                    "</div></div>", unsafe_allow_html=True)
-
-st.markdown("---")
-
-# ----- Sidebar controls -----
-st.sidebar.header("Inputs & settings")
-uploaded = st.sidebar.file_uploader("Upload CSV (optional)", type=["csv"])
-use_default = st.sidebar.checkbox("Use default dataset in repo", value=True)
-st.sidebar.markdown("**Model / compute**")
-use_xgb_checkbox = st.sidebar.checkbox("Prefer XGBoost (if available)", value=USE_XGBOOST)
-st.sidebar.markdown("---")
-st.sidebar.markdown("Tips:")
-st.sidebar.write("• CSV should include: Date, Produce_Name, Market_Price_JPY_per_kg.\n"
-                 "• Optional: Temperature_C, Precipitation_mm, Volume_Sold_kg, Quality_Grade")
-
-# ----- Data loader -----
-@st.cache_data
-def load_data(uploaded_file, use_default=True):
-    if uploaded_file is not None:
-        df = pd.read_csv(uploaded_file)
+# ---------- Data loader ----------
+@st.cache_data(show_spinner=False)
+def load_df():
+    # try local first
+    if os.path.exists(DATA_LOCAL):
+        df = pd.read_csv(DATA_LOCAL)
+    elif DATA_RAW_URL:
+        df = pd.read_csv(DATA_RAW_URL)
     else:
-        if use_default:
-            if not os.path.exists(DATA_PATH_DEFAULT):
-                return None
-            df = pd.read_csv(DATA_PATH_DEFAULT)
-        else:
-            return None
+        return None
     df.columns = [c.strip() for c in df.columns]
     if 'Date' not in df.columns:
         return None
@@ -98,296 +65,202 @@ def load_data(uploaded_file, use_default=True):
     df = df.sort_values('Date').reset_index(drop=True)
     return df
 
-df = load_data(uploaded, use_default)
+df = load_df()
 if df is None:
-    st.warning("No dataset loaded. Upload a CSV or enable the default dataset (ensure path is correct).")
+    st.error("Dataset not found. Place realistic_dummy_dataset.csv in repo root or set DATA_RAW_URL in the script.")
     st.stop()
 
-# quick sanity
-required_cols = {'Date', 'Produce_Name', 'Market_Price_JPY_per_kg'}
-if not required_cols.issubset(set(df.columns)):
-    st.error(f"Dataset missing required columns: {required_cols - set(df.columns)}")
+# minimal required columns check
+if not {'Produce_Name','Market_Price_JPY_per_kg'}.issubset(df.columns):
+    st.error("Dataset must include columns: Produce_Name, Market_Price_JPY_per_kg")
     st.stop()
 
-# ----- App body in tabs -----
-tab_data, tab_train, tab_forecast, tab_about = st.tabs(["Data", "Train & Validate", "Forecast (interactive)", "About"])
+# ---------- Controls ----------
+produces = sorted(df['Produce_Name'].unique().tolist())
+col1, col2, col3 = st.columns([4,2,2])
+with col1:
+    produce = st.selectbox("Produce", produces)
+with col2:
+    # default today temp = last recorded temp for that produce (if available)
+    last_temp_val = None
+    tmpdf = df[df['Produce_Name']==produce]
+    if 'Temperature_C' in tmpdf.columns and not tmpdf['Temperature_C'].isna().all():
+        last_temp_val = float(tmpdf.sort_values('Date').iloc[-1]['Temperature_C'])
+    temp_today = st.number_input("Today's temp (°C)", value=float(last_temp_val) if last_temp_val is not None else 20.0, step=0.1, format="%.1f")
+with col3:
+    horizon = st.slider("Days to forecast", 1, 14, 7)
 
-# ---------- Data tab ----------
-with tab_data:
-    st.subheader("Dataset snapshot")
-    c1, c2, c3 = st.columns([1,1,1])
-    with c1:
-        st.metric("Rows", df.shape[0])
-    with c2:
-        st.metric("Unique produces", int(df['Produce_Name'].nunique()))
-    with c3:
-        st.metric("Date range", f"{df['Date'].min().date()} → {df['Date'].max().date()}")
+st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-    # sample table
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.write(df.head(12))
-    st.markdown("</div>", unsafe_allow_html=True)
+# ---------- Feature engineering (fast) ----------
+def create_features_single(df_prod):
+    d = df_prod.copy().sort_values('Date').reset_index(drop=True)
+    d['price_lag_1'] = d['Market_Price_JPY_per_kg'].shift(1)
+    d['price_lag_7'] = d['Market_Price_JPY_per_kg'].shift(7)
+    d['price_lag_30'] = d['Market_Price_JPY_per_kg'].shift(30)
+    d['roll_mean_7'] = d['Market_Price_JPY_per_kg'].shift(1).rolling(7).mean()
+    if 'Temperature_C' in d.columns:
+        d['temp_roll_3'] = d['Temperature_C'].shift(1).rolling(3).mean()
+        d['Temperature_C'] = d['Temperature_C'].astype(float)
+    if 'Precipitation_mm' in d.columns:
+        d['precip_roll_3'] = d['Precipitation_mm'].shift(1).rolling(3).sum()
+        d['Precipitation_mm'] = d['Precipitation_mm'].astype(float)
+    d = d.dropna(subset=['price_lag_1']).reset_index(drop=True)
+    return d
 
-    st.markdown("### Quick correlations (numerical)")
-    try:
-        num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-        corr = df[num_cols].corr().round(3)
-        st.dataframe(corr.style.background_gradient(axis=None))
-    except Exception:
-        st.write("Correlation unavailable (small data or non-numeric).")
+df_prod_all = df[df['Produce_Name']==produce].copy().reset_index(drop=True)
+feat = create_features_single(df_prod_all)
+if feat.shape[0] < 10:
+    st.warning("Not enough history for reliable forecast. Add more data.")
+    # continue but predictions will be baseline
 
-# ---------- Train & Validate tab ----------
-with tab_train:
-    st.subheader("Model training & quick validation")
-    produce_list = sorted(df['Produce_Name'].unique().tolist())
-    selected_produce = st.selectbox("Choose produce to train on", produce_list, index=0)
+# Candidate features (numeric only)
+exclude = ['Date','Produce_Name','Market_Price_JPY_per_kg','Category','Season','Quality_Grade']
+candidate_features = [c for c in feat.columns if c not in exclude and np.issubdtype(feat[c].dtype, np.number)]
 
-    st.markdown("Small model training for the chosen produce. This can run in seconds for reasonable data sizes.")
-    st.info("Tip: Use 'Forecast' tab after training to run interactive forecasts using farmer-provided weather.")
+# ---------- Fast training + caching ----------
+def _cache_key_for(produce_name, features):
+    key = f"{produce_name}|" + ",".join(features)
+    return hashlib.sha1(key.encode()).hexdigest()
 
-    # small options
-    col_a, col_b = st.columns([1,1])
-    with col_a:
-        test_days = st.number_input("Validation window (days)", min_value=30, max_value=730, value=180)
-    with col_b:
-        n_estimators = st.number_input("RF trees (if using RF)", min_value=50, max_value=1000, value=200, step=50)
-
-    # filter produce
-    df_prod = df[df['Produce_Name'] == selected_produce].copy().reset_index(drop=True)
-
-    def create_features(df_prod):
-        d = df_prod.copy().sort_values('Date').reset_index(drop=True)
-        d['year'] = d['Date'].dt.year
-        d['month'] = d['Date'].dt.month
-        d['dayofweek'] = d['Date'].dt.dayofweek
-        d['price_lag_1'] = d['Market_Price_JPY_per_kg'].shift(1)
-        d['price_lag_7'] = d['Market_Price_JPY_per_kg'].shift(7)
-        d['price_lag_30'] = d['Market_Price_JPY_per_kg'].shift(30)
-        d['roll_mean_7'] = d['Market_Price_JPY_per_kg'].shift(1).rolling(7).mean()
-        d['roll_std_7'] = d['Market_Price_JPY_per_kg'].shift(1).rolling(7).std()
-        if 'Temperature_C' in d.columns:
-            d['temp_roll_3'] = d['Temperature_C'].shift(1).rolling(3).mean()
-        if 'Precipitation_mm' in d.columns:
-            d['precip_roll_3'] = d['Precipitation_mm'].shift(1).rolling(3).sum()
-        d = d.dropna(subset=['price_lag_1']).reset_index(drop=True)
-        return d
-
-    feat = create_features(df_prod)
-    st.write(f"Rows after feature engineering: {feat.shape[0]}")
-
-    split_date = feat['Date'].max() - pd.Timedelta(days=int(test_days))
-    train = feat[feat['Date'] < split_date].copy()
-    test = feat[feat['Date'] >= split_date].copy()
-
-    st.write(f"Train rows: {train.shape[0]} | Test rows: {test.shape[0]} (split: {split_date.date()})")
-
-    # choose features automatically
-    exclude = ['Date', 'Produce_Name', 'Market_Price_JPY_per_kg', 'Category', 'Season', 'Quality_Grade']
-    candidate_features = [c for c in feat.columns if c not in exclude and np.issubdtype(feat[c].dtype, np.number)]
-    st.write("Features used:", candidate_features)
-
-    if st.button("Train quick model now"):
-        # prepare data
-        X_train = train[candidate_features].fillna(0)
-        y_train = train['Market_Price_JPY_per_kg']
-        X_test = test[candidate_features].fillna(0)
-        y_test = test['Market_Price_JPY_per_kg']
-
-        # train
-        if use_xgb_checkbox and USE_XGBOOST:
-            dtrain = xgb.DMatrix(X_train, label=y_train)
-            dtest = xgb.DMatrix(X_test, label=y_test)
-            params = {'objective': 'reg:squarederror', 'eval_metric': 'rmse', 'seed': 42}
-            bst = xgb.train(params, dtrain, num_boost_round=200, evals=[(dtest, 'eval')], early_stopping_rounds=25, verbose_eval=False)
-            predict_fn = lambda X: bst.predict(xgb.DMatrix(X))
-            model = bst
-            model_name = "XGBoost"
-        else:
-            from sklearn.ensemble import RandomForestRegressor
-            rf = RandomForestRegressor(n_estimators=int(n_estimators), random_state=42, n_jobs=-1)
-            rf.fit(X_train, y_train)
-            predict_fn = lambda X: rf.predict(X)
-            model = rf
-            model_name = "RandomForest"
-
-        preds = predict_fn(X_test)
-        mae_v = mean_absolute_error(y_test, preds)
-        st.success(f"Trained {model_name}. Test MAE: {mae_v:.3f} JPY/kg")
-
-        # show metrics nicely
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Test MAE", f"{mae_v:.3f} JPY/kg")
-        m2.metric("Train rows", f"{X_train.shape[0]}")
-        m3.metric("Test rows", f"{X_test.shape[0]}")
-
-        # save model
-        try:
-            joblib.dump(model, MODEL_SAVE_PATH.format(selected_produce))
-            st.info("Model saved to analysis_outputs/")
-        except Exception as e:
-            st.write("Could not save model:", e)
-
-        # show importance if RF
-        if model_name == "RandomForest":
-            try:
-                importances = pd.Series(model.feature_importances_, index=candidate_features).sort_values(ascending=False)
-                st.subheader("Feature importance")
-                st.bar_chart(importances.head(12))
-                # export CSV
-                buf = io.StringIO()
-                importances.to_csv(buf, header=True)
-                st.download_button("Download feature importance CSV", data=buf.getvalue(), file_name=f"fi_{selected_produce}.csv")
-            except Exception:
-                pass
-
-# ---------- Forecast tab ----------
-with tab_forecast:
-    st.subheader("Interactive forecast for farmers")
-    produce_list = sorted(df['Produce_Name'].unique().tolist())
-    prod = st.selectbox("Pick produce to forecast", produce_list, index=0)
-
-    df_prod_all = df[df['Produce_Name'] == prod].copy().reset_index(drop=True)
-    st.markdown(f"**Available data:** {df_prod_all['Date'].min().date()} → {df_prod_all['Date'].max().date()} | Rows: {df_prod_all.shape[0]}")
-
-    last_row = df_prod_all.sort_values('Date').iloc[-1]
-    last_temp = float(last_row['Temperature_C']) if 'Temperature_C' in df_prod_all.columns else 0.0
-    last_precip = float(last_row['Precipitation_mm']) if 'Precipitation_mm' in df_prod_all.columns else 0.0
-
-    st.subheader("Farmer inputs")
-    c1, c2, c3 = st.columns([1,1,1])
-    with c1:
-        temp_input = st.number_input("Today's temperature (°C)", value=float(last_temp), format="%.2f")
-    with c2:
-        precip_input = st.number_input("Today's precipitation (mm)", value=float(last_precip), format="%.2f")
-    with c3:
-        horizon = st.slider("Forecast horizon (days)", 1, 14, 7)
-
-    # prepare features
-    feat_full = create_features(df_prod_all)
-    if feat_full.shape[0] < 7:
-        st.warning("Not enough history to forecast reliably. Add more data.")
+@st.cache_resource  # persists across reruns until code changes
+def train_model_cached(key, X, y, max_samples=3000):
+    """
+    Train a reasonably fast model and return it. Cached by key.
+    - Uses HistGradientBoosting when available, else Ridge.
+    - Downcasts floats for speed and limits rows to most recent max_samples.
+    """
+    # downcast floats
+    Xc = X.copy()
+    for c in Xc.select_dtypes(include=['float64','int64']).columns:
+        Xc[c] = pd.to_numeric(Xc[c], downcast='float')
+    # cap rows: keep most recent
+    if Xc.shape[0] > max_samples:
+        Xc = Xc.tail(max_samples).copy()
+        yc = y.tail(max_samples).copy()
     else:
-        # try load model if exists
-        model_path = MODEL_SAVE_PATH.format(prod)
-        model_loaded = None
-        if os.path.exists(model_path):
-            try:
-                model_loaded = joblib.load(model_path)
-                st.info(f"Loaded saved model for {prod}")
-            except Exception:
-                model_loaded = None
+        yc = y.copy()
+    # choose model
+    if HAVE_HGB:
+        model = HistGradientBoostingRegressor(max_iter=100, max_depth=10)
+    else:
+        model = Ridge(alpha=1.0)
+    model.fit(Xc.fillna(0), yc)
+    # try persist to disk
+    try:
+        joblib.dump(model, os.path.join(OUTPUT_DIR, f"model_{key}.joblib"))
+    except Exception:
+        pass
+    return model
 
-        # if no model, train lightweight RF quickly
-        if model_loaded is None:
-            st.info("No saved model found — training quick RandomForest (fast).")
-            # quick train on full history excluding very recent horizon
-            split_date = feat_full['Date'].max() - pd.Timedelta(days=30)
-            tr = feat_full[feat_full['Date'] < split_date].copy()
-            te = feat_full[feat_full['Date'] >= split_date].copy()
-            candidate_features = [c for c in feat_full.columns if c not in ['Date','Produce_Name','Market_Price_JPY_per_kg','Category','Season','Quality_Grade'] and np.issubdtype(feat_full[c].dtype, np.number)]
-            from sklearn.ensemble import RandomForestRegressor
-            rf = RandomForestRegressor(n_estimators=150, random_state=42, n_jobs=-1)
-            if tr.shape[0] >= 20:
-                rf.fit(tr[candidate_features].fillna(0), tr['Market_Price_JPY_per_kg'])
-                model_loaded = rf
-                predict_fn = lambda X: model_loaded.predict(X)
+def load_model_if_exists(key):
+    path = os.path.join(OUTPUT_DIR, f"model_{key}.joblib")
+    if os.path.exists(path):
+        try:
+            return joblib.load(path)
+        except Exception:
+            return None
+    return None
+
+# ---------- Forecast logic (recursive, light) ----------
+def recursive_forecast(model, feat_full, candidate_features, temp_input, precip_input, h):
+    # we use last row as current state and update lags iteratively
+    last = feat_full.sort_values('Date').iloc[-1].copy()
+    recent_temps = list(feat_full.sort_values('Date').get('Temperature_C', pd.Series()).dropna().values[-3:]) if 'Temperature_C' in feat_full.columns else []
+    recent_precips = list(feat_full.sort_values('Date').get('Precipitation_mm', pd.Series()).dropna().values[-3:]) if 'Precipitation_mm' in feat_full.columns else []
+    current = last.copy()
+    rows = []
+    for i in range(h):
+        fv = {}
+        for f in candidate_features:
+            if f == 'Temperature_C':
+                fv[f] = float(temp_input)
+            elif f == 'Precipitation_mm':
+                fv[f] = float(precip_input)
+            elif f.startswith('temp_roll_3'):
+                tlist = (recent_temps + [temp_input])[-3:]
+                fv[f] = float(np.mean(tlist)) if len(tlist)>0 else float(temp_input)
+            elif f.startswith('precip_roll_3'):
+                plist = (recent_precips + [precip_input])[-3:]
+                fv[f] = float(np.sum(plist)) if len(plist)>0 else float(precip_input)
+            elif f.startswith('price_lag_'):
+                lag = int(f.split('_')[-1])
+                lookup_date = current['Date'] - pd.Timedelta(days=lag)
+                val = feat_full[feat_full['Date']==lookup_date]['Market_Price_JPY_per_kg']
+                fv[f] = float(val.values[0]) if not val.empty else float(current.get('Market_Price_JPY_per_kg', 0))
             else:
-                st.warning("Not enough data to train a fallback model. Showing simple baseline (yesterday's price).")
-                model_loaded = None
+                fv[f] = float(current.get(f, 0) if f in current else 0)
+        Xrow = pd.DataFrame([fv]).fillna(0)
+        try:
+            pred = float(model.predict(Xrow)[0])
+        except Exception:
+            # fallback to last price
+            pred = float(current.get('Market_Price_JPY_per_kg', 0))
+        next_date = current['Date'] + pd.Timedelta(days=1)
+        rows.append({"Date": next_date.date(), "Predicted": round(pred,2)})
+        # update state
+        recent_temps.append(temp_input); recent_temps = recent_temps[-3:]
+        recent_precips.append(precip_input); recent_precips = recent_precips[-3:]
+        current['Date'] = next_date
+        current['Market_Price_JPY_per_kg'] = pred
+        current['price_lag_1'] = pred
+    return pd.DataFrame(rows)
 
-        if model_loaded is None:
-            # baseline forecast: repeat last price
-            last_price = float(feat_full.sort_values('Date').iloc[-1]['Market_Price_JPY_per_kg'])
-            fc = [{'Date': (feat_full['Date'].max() + pd.Timedelta(days=i+1)).date(), 'Predicted_Price': last_price} for i in range(horizon)]
-            fc_df = pd.DataFrame(fc)
-            st.warning("Using baseline (last-price) forecast due to insufficient model/data.")
-            st.dataframe(fc_df)
-            st.download_button("Download forecast CSV", data=fc_df.to_csv(index=False), file_name=f"{prod}_forecast.csv")
+# ---------- MAIN: Forecast button ----------
+forecast_button = st.button("Show forecast", key="forecast_btn")
+
+if forecast_button:
+    # prepare training set (train on history excluding last few days to avoid leakage)
+    feat_full = feat.copy() if 'feat' in locals() else create_features_single(df_prod_all)
+    if feat_full.shape[0] < 5:
+        st.warning("Insufficient history; showing baseline (last price repeated).")
+        last_price = float(df_prod_all.sort_values('Date').iloc[-1]['Market_Price_JPY_per_kg'])
+        baseline_preds = pd.DataFrame([{"Date": (df_prod_all['Date'].max() + pd.Timedelta(days=i+1)).date(),
+                                        "Predicted": round(last_price,2)} for i in range(horizon)])
+        # big tomorrow
+        tomorrow = baseline_preds.iloc[0]['Predicted']
+        st.markdown(f"<div class='card' style='text-align:center;margin-bottom:12px'><div class='big-price'>{tomorrow} JPY/kg</div>"
+                    f"<div style='color:#475569;margin-top:6px'>Predicted for tomorrow</div></div>", unsafe_allow_html=True)
+        # small list
+        small = baseline_preds.iloc[1:].to_dict('records')
+        if small:
+            st.markdown("<div class='card small-list'>")
+            for r in small:
+                st.write(f"{r['Date']} — {r['Predicted']} JPY/kg")
+            st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        # feature + target
+        X = feat_full[candidate_features].fillna(0)
+        y = feat_full['Market_Price_JPY_per_kg']
+        key = _cache_key_for(produce, candidate_features)
+        # try load persisted
+        model = load_model_if_exists(key)
+        if model is None:
+            t0 = time.time()
+            model = train_model_cached(key, X, y, max_samples=3000)
+            t_train = time.time() - t0
+            st.info(f"Trained (or loaded) model in {t_train:.1f}s")
         else:
-            # do recursive forecast using farmer-provided constant weather
-            last_row = feat_full.sort_values('Date').iloc[-1].copy()
-            recent_temps = list(feat_full.sort_values('Date')['Temperature_C'].dropna().values[-3:]) if 'Temperature_C' in feat_full else []
-            recent_precips = list(feat_full.sort_values('Date')['Precipitation_mm'].dropna().values[-3:]) if 'Precipitation_mm' in feat_full else []
-            user_temp = float(temp_input)
-            user_precip = float(precip_input)
-            candidate_features = [c for c in feat_full.columns if c not in ['Date','Produce_Name','Market_Price_JPY_per_kg','Category','Season','Quality_Grade'] and np.issubdtype(feat_full[c].dtype, np.number)]
+            st.info("Loaded model from disk/cache (fast).")
+        # recursive forecast using farmer temp (constant) and no precip input UI (use 0 if absent)
+        precip_input = 0.0
+        if 'Precipitation_mm' in feat_full.columns:
+            precip_input = float(feat_full.sort_values('Date').iloc[-1].get('Precipitation_mm',0))
+        fc = recursive_forecast(model, feat_full, candidate_features, temp_today, precip_input, horizon)
+        # display: tomorrow big, rest small
+        tomorrow_value = fc.iloc[0]['Predicted']
+        st.markdown(f"<div class='card' style='text-align:center;margin-bottom:12px'><div class='big-price'>{tomorrow_value} JPY/kg</div>"
+                    f"<div style='color:#475569;margin-top:6px'>Predicted price — tomorrow</div></div>", unsafe_allow_html=True)
+        # small table for remaining days (if horizon > 1)
+        if horizon > 1:
+            small_df = fc.iloc[1:].reset_index(drop=True)
+            st.markdown("<div class='card small-list'>", unsafe_allow_html=True)
+            for _, row in small_df.iterrows():
+                st.markdown(f"<div style='padding:6px 0'>{row['Date']} — <b>{row['Predicted']}</b> JPY/kg</div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+        # download button
+        csv_bytes = fc.to_csv(index=False).encode('utf-8')
+        st.download_button("Download forecast CSV", data=csv_bytes, file_name=f"{produce}_forecast.csv", mime="text/csv")
 
-            current = last_row.copy()
-            rows = []
-            for i in range(horizon):
-                fv = {}
-                for f in candidate_features:
-                    if f == 'Temperature_C':
-                        fv[f] = user_temp
-                    elif f == 'Precipitation_mm':
-                        fv[f] = user_precip
-                    elif f.startswith('temp_roll_3'):
-                        temps = (recent_temps + [user_temp])[-3:]
-                        fv[f] = float(np.mean(temps)) if len(temps) > 0 else 0.0
-                    elif f.startswith('precip_roll_3'):
-                        precs = (recent_precips + [user_precip])[-3:]
-                        fv[f] = float(np.sum(precs)) if len(precs) > 0 else 0.0
-                    elif f.startswith('price_lag_'):
-                        lag = int(f.split('_')[-1])
-                        lookup_date = current['Date'] - pd.Timedelta(days=lag)
-                        val = feat_full[feat_full['Date'] == lookup_date]['Market_Price_JPY_per_kg']
-                        if not val.empty:
-                            fv[f] = float(val.values[0])
-                        else:
-                            fv[f] = float(current.get('Market_Price_JPY_per_kg', 0))
-                    else:
-                        fv[f] = float(current.get(f, 0) if f in current else 0)
-                fv_df = pd.DataFrame([fv]).fillna(0)
-                pred_next = float(model_loaded.predict(fv_df)[0])
-                next_date = current['Date'] + pd.Timedelta(days=1)
-                rows.append({'Date': next_date.date(), 'Predicted_Price': pred_next})
-                # update queues/state
-                recent_temps.append(user_temp); recent_temps = recent_temps[-3:]
-                recent_precips.append(user_precip); recent_precips = recent_precips[-3:]
-                current['Date'] = next_date
-                current['Market_Price_JPY_per_kg'] = pred_next
-                current['price_lag_1'] = pred_next
-
-            fc_df = pd.DataFrame(rows)
-            st.subheader("Forecast (next days)")
-            st.dataframe(fc_df)
-
-            # quick KPIs
-            today_price = float(feat_full.sort_values('Date').iloc[-1]['Market_Price_JPY_per_kg'])
-            change_pct = (fc_df['Predicted_Price'].iloc[0] - today_price) / max(1e-6, today_price) * 100
-            k1, k2, k3 = st.columns(3)
-            k1.metric("Price today (JPY/kg)", f"{today_price:.2f}")
-            k2.metric("Tomorrow (pred.)", f"{fc_df['Predicted_Price'].iloc[0]:.2f}", delta=f"{change_pct:.2f}%")
-            k3.metric("Horizon", f"{horizon} days")
-
-            # download
-            st.download_button("Download forecast CSV", data=fc_df.to_csv(index=False), file_name=f"{prod}_forecast.csv", mime="text/csv")
-
-            # show plots (streamlit charts)
-            st.subheader("Visual: recent actuals + forecast")
-            hist = feat_full[['Date', 'Market_Price_JPY_per_kg']].copy().tail(14)
-            hist_plot = hist.set_index('Date').rename(columns={'Market_Price_JPY_per_kg': 'actual'}).resample('D').mean().ffill()
-            fc_plot = pd.Series(fc_df['Predicted_Price'].values, index=pd.to_datetime(fc_df['Date']))
-            # build combined df
-            full_index = pd.date_range(hist_plot.index.min(), fc_plot.index.max(), freq='D')
-            actual_col = hist_plot['actual'].reindex(full_index).ffill()
-            forecast_col = pd.Series([np.nan]*len(full_index), index=full_index)
-            forecast_col.loc[fc_plot.index] = fc_plot.values
-            plot_df = pd.DataFrame({"actual": actual_col, "forecast": forecast_col})
-            st.line_chart(plot_df)
-
-# ---------- About tab ----------
-with tab_about:
-    st.header("About SmartFarm")
-    st.write(
-        "SmartFarm is a lightweight forecasting tool built for the Talent for Japan 2025 challenge.\n\n"
-        "This polished UI helps farmers quickly check short-term price expectations and make simple decisions: hold, sell, or wait.\n\n"
-        "For production deployment: (1) host pre-trained models on S3 or a small API, (2) add authentication, (3) add prediction intervals and robust CV."
-    )
-
-    st.markdown("**Quick links & notes**")
-    st.markdown("- Keep datasets small in the repo (< 50MB) or host externally (S3/Google Drive).")
-    st.markdown("- For cloud deployment, ensure `requirements.txt` has compatible wheel versions (numpy/pandas/scikit-learn).")
-
-st.markdown("---")
-st.caption("Made by Sirram Charan.")
+# small footer
+st.markdown("<div style='height:18px'></div><div style='text-align:center;color:#94a3b8;font-size:12px'>Lightweight forecast — cached models for speed. For production, host pre-trained models & serve via API.</div></div>", unsafe_allow_html=True)
