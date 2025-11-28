@@ -196,7 +196,10 @@ def recursive_forecast(model, feat_full, candidate_features, temp_input, precip_
         except Exception:
             # fallback to last price
             pred = float(current.get('Market_Price_JPY_per_kg', 0))
-        next_date = current['Date'] + pd.Timedelta(days=1)
+        # Real-world date anchor
+        real_today = pd.Timestamp.today().normalize()
+        next_date = real_today + pd.Timedelta(days=i+1)
+
         rows.append({"Date": next_date.date(), "Predicted": round(pred,2)})
         # update state
         recent_temps.append(temp_input); recent_temps = recent_temps[-3:]
