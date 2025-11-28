@@ -1,5 +1,5 @@
 # smartfarm_interactive.py
-# DESIGN UPDATE: Hero Card + Visible Grid System (No hidden details)
+# FIX: "Mini-Cards" now use a High-Contrast Light Green theme to ensure visibility.
 
 import streamlit as st
 import pandas as pd
@@ -27,7 +27,7 @@ DATA_RAW_URL = ""
 OUTPUT_DIR = "analysis_outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# ---------- UI & STYLING (Dark Mode + Grid System) ----------
+# ---------- UI & STYLING ----------
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
@@ -36,12 +36,12 @@ st.markdown("""
         font-family: 'Poppins', sans-serif;
     }
     
-    /* Header */
+    /* Header - White for Dark Mode */
     .main-header { text-align: center; margin-bottom: 2rem; }
     .main-header h1 { font-weight: 700; color: #f1f5f9 !important; }
     .main-header p { color: #94a3b8 !important; font-size: 15px; }
 
-    /* HERO CARD (Light Green - Special Attention) */
+    /* HERO CARD (Big) */
     .result-card {
         background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
         border: 1px solid #10b981;
@@ -72,41 +72,44 @@ st.markdown("""
         font-weight: 600;
     }
     
-    /* MINI CARDS GRID (Dark Slate - Cohesive with Dark Mode) */
+    /* MINI CARDS GRID - UPDATED FOR VISIBILITY */
+    /* We force a Light Background (#f0fdf4) so dark text is always seen */
     .grid-container {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-        gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 15px;
         margin-top: 1rem;
         margin-bottom: 2rem;
     }
     .mini-card {
-        background-color: #1e293b; /* Dark Slate */
-        border: 1px solid #334155;
+        background-color: #f0fdf4; /* Mint Cream */
+        border: 1px solid #86efac; /* Light Green Border */
         border-radius: 12px;
         padding: 1rem;
         text-align: center;
-        transition: transform 0.2s, border-color 0.2s;
+        transition: transform 0.2s, box-shadow 0.2s;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
     .mini-card:hover {
-        border-color: #10b981; /* Green glow on hover */
+        border-color: #10b981;
         transform: translateY(-3px);
+        box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);
     }
     .mini-date {
-        color: #94a3b8;
-        font-size: 0.8rem;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
+        color: #64748b; /* Slate-500 */
+        font-size: 0.85rem;
+        font-weight: 600;
         margin-bottom: 4px;
     }
     .mini-price {
-        color: #f1f5f9;
-        font-size: 1.3rem;
-        font-weight: 700;
+        color: #064e3b; /* Dark Green Text (High Contrast) */
+        font-size: 1.4rem;
+        font-weight: 800;
     }
     .mini-unit {
-        color: #10b981;
-        font-size: 0.8rem;
+        color: #059669;
+        font-size: 0.75rem;
+        font-weight: 600;
     }
     
     /* Button */
@@ -288,7 +291,7 @@ if st.button("🚀 Generate Forecast"):
             precip_input = float(feat_full.sort_values('Date').iloc[-1].get('Precipitation_mm',0)) if 'Precipitation_mm' in feat_full.columns else 0.0
             fc = recursive_forecast(model, feat_full, candidate_features, temp_today, precip_input, horizon)
 
-        # --- SECTION 1: HERO CARD (Big Next Day) ---
+        # --- SECTION 1: HERO CARD ---
         tomorrow_val = fc.iloc[0]['Predicted']
         st.markdown(f"""
         <div class="result-card">
@@ -298,7 +301,7 @@ if st.button("🚀 Generate Forecast"):
         </div>
         """, unsafe_allow_html=True)
 
-        # --- SECTION 2: GRAPH (The Trend) ---
+        # --- SECTION 2: GRAPH ---
         fc['Date'] = pd.to_datetime(fc['Date'])
         y_min = fc['Predicted'].min() * 0.99
         y_max = fc['Predicted'].max() * 1.01
@@ -318,12 +321,10 @@ if st.button("🚀 Generate Forecast"):
         
         st.altair_chart(c, use_container_width=True)
 
-        # --- SECTION 3: VISIBLE GRID (The "Strategic" View) ---
-        # No more hidden expanders. We display the rest of the days as mini-cards.
+        # --- SECTION 3: VISIBLE GRID (Mini Cards) ---
         if horizon > 1:
             st.markdown("<div style='margin-top:20px; margin-bottom:10px; color:#f1f5f9; font-weight:600'>Upcoming Outlook</div>", unsafe_allow_html=True)
             
-            # Generate the HTML Grid
             grid_html = '<div class="grid-container">'
             for _, row in fc.iloc[1:].iterrows():
                 d_str = row['Date'].strftime('%b %d')
@@ -338,6 +339,6 @@ if st.button("🚀 Generate Forecast"):
             grid_html += "</div>"
             st.markdown(grid_html, unsafe_allow_html=True)
             
-            # Discreet Download Link
+            # Download
             csv = fc.to_csv(index=False).encode('utf-8')
             st.download_button("Download CSV", data=csv, file_name=f"{produce}_forecast.csv", mime="text/csv")
