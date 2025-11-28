@@ -1,5 +1,5 @@
 # smartfarm_interactive.py
-# DESIGN UPDATE: Dark Mode Optimized + Zoomed-in Graph
+# FIX: Forecast now starts strictly after the last dataset date (Continuous Time)
 
 import streamlit as st
 import pandas as pd
@@ -27,18 +27,16 @@ DATA_RAW_URL = ""
 OUTPUT_DIR = "analysis_outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# ---------- UI & STYLING (Dark Mode Optimized) ----------
+# ---------- UI & STYLING (Dark Mode Native + White Text Tweaks) ----------
 st.markdown("""
 <style>
-    /* Import Font */
     @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap');
 
-    /* Global Font Application */
     html, body, [class*="css"] {
         font-family: 'Poppins', sans-serif;
     }
     
-    /* Header Styling - White Text for Dark Background */
+    /* Header - White for Dark Mode */
     .main-header {
         text-align: center;
         margin-bottom: 2rem;
@@ -46,14 +44,14 @@ st.markdown("""
     .main-header h1 {
         font-weight: 700;
         margin-bottom: 0.5rem;
-        color: #f1f5f9 !important; /* White/Slate-100 */
+        color: #f1f5f9 !important;
     }
     .main-header p {
-        color: #94a3b8 !important; /* Slate-400 */
+        color: #94a3b8 !important;
         font-size: 15px;
     }
 
-    /* THE HERO CARD (Kept Light for Contrast) */
+    /* Hero Card */
     .result-card {
         background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
         border: 1px solid #10b981;
@@ -63,7 +61,6 @@ st.markdown("""
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
         margin-bottom: 1.5rem;
     }
-    /* Text INSIDE the card must be dark to read on light green */
     .price-label {
         color: #047857 !important;
         font-weight: 600;
@@ -85,7 +82,7 @@ st.markdown("""
         font-weight: 600;
     }
     
-    /* Button Styling */
+    /* Button */
     .stButton > button {
         width: 100%;
         background-color: #10b981;
@@ -94,23 +91,22 @@ st.markdown("""
         padding: 0.6rem 1rem;
         border-radius: 8px;
         font-weight: 600;
-        transition: all 0.2s ease;
     }
     .stButton > button:hover {
         background-color: #059669;
         box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
     }
 
-    /* Table Styling - Light Text for Dark Background */
+    /* Table Rows */
     .forecast-row {
         display: flex;
         justify-content: space-between;
         padding: 12px 0;
-        border-bottom: 1px solid #334155; /* Darker border */
+        border-bottom: 1px solid #334155;
         font-size: 1rem;
     }
-    .date-col { color: #94a3b8 !important; } /* Slate-400 */
-    .price-col { font-weight: 600; color: #f1f5f9 !important; } /* White */
+    .date-col { color: #94a3b8 !important; }
+    .price-col { font-weight: 600; color: #f1f5f9 !important; }
 
 </style>
 """, unsafe_allow_html=True)
@@ -219,10 +215,14 @@ def load_model_if_exists(key):
     return None
 
 def recursive_forecast(model, feat_full, candidate_features, temp_input, precip_input, h):
-    last = feat_full.sort_values('Date').iloc[-1].copy()
+    # 1. Anchor to the LAST DATE in the dataset, not "today"
+    last_row = feat_full.sort_values('Date').iloc[-1].copy()
+    anchor_date = pd.to_datetime(last_row['Date'])
+    
     recent_temps = list(feat_full.sort_values('Date').get('Temperature_C', pd.Series()).dropna().values[-3:]) if 'Temperature_C' in feat_full.columns else []
     recent_precips = list(feat_full.sort_values('Date').get('Precipitation_mm', pd.Series()).dropna().values[-3:]) if 'Precipitation_mm' in feat_full.columns else []
-    current = last.copy()
+    
+    current = last_row.copy()
     rows = []
     
     for i in range(h):
@@ -248,7 +248,8 @@ def recursive_forecast(model, feat_full, candidate_features, temp_input, precip_
         try: pred = float(model.predict(Xrow)[0])
         except Exception: pred = float(current.get('Market_Price_JPY_per_kg', 0))
             
-        next_date = pd.Timestamp.today().normalize() + pd.Timedelta(days=i+1)
+        # 2. Increment date based on anchor
+        next_date = anchor_date + pd.Timedelta(days=i+1)
         rows.append({"Date": next_date.date(), "Predicted": round(pred,2)})
         
         recent_temps.append(temp_input); recent_temps = recent_temps[-3:]
@@ -277,20 +278,19 @@ if st.button("🚀 Generate Forecast"):
             precip_input = float(feat_full.sort_values('Date').iloc[-1].get('Precipitation_mm',0)) if 'Precipitation_mm' in feat_full.columns else 0.0
             fc = recursive_forecast(model, feat_full, candidate_features, temp_today, precip_input, horizon)
 
-        # 1. The Card (Kept as is - works great on dark)
+        # 1. Result Card
         tomorrow_val = fc.iloc[0]['Predicted']
+        # Dynamic label based on whether it is actually tomorrow or just the next data point
         st.markdown(f"""
         <div class="result-card">
-            <div class="price-label">Tomorrow's Predicted Price</div>
+            <div class="price-label">Next Day's Predicted Price</div>
             <div class="big-price">{tomorrow_val}<span class="unit"> JPY</span></div>
             <div style="color:#059669 !important; font-size: 14px; margin-top:5px;">Per kg • {produce}</div>
         </div>
         """, unsafe_allow_html=True)
 
-        # 2. Graph (Zoomed In + Dark Mode Axes)
+        # 2. Graph (Zoomed In + Correct Dates)
         fc['Date'] = pd.to_datetime(fc['Date'])
-        
-        # We calculate min/max to ensure the scale is not flat 0-100
         y_min = fc['Predicted'].min() * 0.99
         y_max = fc['Predicted'].max() * 1.01
 
@@ -303,22 +303,21 @@ if st.button("🚀 Generate Forecast"):
                     axis=alt.Axis(format='%b %d', title='Forecast Date', labelColor='#94a3b8', titleColor='#94a3b8')),
             y=alt.Y('Predicted', 
                     title='Price (JPY)', 
-                    # ZERO=FALSE is key here to zoom in
                     scale=alt.Scale(zero=False, domain=[y_min, y_max]), 
                     axis=alt.Axis(labelColor='#94a3b8', titleColor='#94a3b8')),
             tooltip=['Date', 'Predicted']
         ).properties(
-            title="Future Trend",
+            title="Future Trend (Next 7-14 Days)",
             height=250
         ).configure_title(
-            color='#f1f5f9', font='Poppins' # White title
+            color='#f1f5f9', font='Poppins'
         ).configure_view(
             strokeWidth=0
         )
         
         st.altair_chart(c, use_container_width=True)
 
-        # 3. Table (Dark Mode Text)
+        # 3. Table
         if horizon > 1:
             with st.expander("📄 View Details"):
                 html = "<div>"
